@@ -1,17 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 
 import { STAGE_PLAN } from "../core/progress";
 import type { ProgressEvent } from "../core/types";
-import type { AnalyzeResult, Frame, SlopWarning } from "./result-types";
-import {
-  deleteConversation,
-  loadConversations,
-  saveConversation,
-  SavedConversationQuotaError,
-  type SavedConversation
-} from "./saved-conversations";
+import type { AnalyzeResult, Frame, SavedVideoSummary, SlopWarning, User } from "./result-types";
 import { SiteFooter, SiteHeader } from "./site-chrome";
 
 type Phase = "compose" | "running" | "done";
@@ -172,6 +166,10 @@ const TAB_FILES: Partial<Record<ResultTab, string>> = {
 };
 
 export default function Home() {
+  // Auth state
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   // Form state
   const [url, setUrl] = useState("");
   const [topK, setTopK] = useState(8);
@@ -194,8 +192,9 @@ export default function Home() {
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [toast, setToast] = useState("");
 
-  // Saved conversations — past analyses kept in the browser's localStorage.
-  const [saved, setSaved] = useState<SavedConversation[]>([]);
+  // Saved videos — past analyses kept in Postgres for the signed-in user.
+  const [saved, setSaved] = useState<SavedVideoSummary[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const runStartRef = useRef(0);
@@ -203,11 +202,23 @@ export default function Home() {
   const videoId = useMemo(() => parseYouTubeId(url), [url]);
   const canSubmit = url.trim().length > 0 && phase !== "running";
 
-  /* Hydrate the saved-conversation list once, on the client. localStorage is
-   * unavailable during SSR, so the list starts empty and fills in after mount. */
+  /* Hydrate the signed-in account and its saved video list. */
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-mount localStorage read
-    setSaved(loadConversations());
+    let alive = true;
+    (async () => {
+      try {
+        const response = await fetch("/api/me", { cache: "no-store" });
+        const payload = (await response.json()) as { user: User | null };
+        if (!alive) return;
+        setUser(payload.user);
+        if (payload.user) await refreshVideos();
+      } finally {
+        if (alive) setAuthLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   /* Live elapsed clock while a run is in flight. */
@@ -243,6 +254,40 @@ export default function Home() {
   }, [lightbox, result]);
 
   const flashToast = useCallback((message: string) => setToast(message), []);
+
+  async function refreshVideos() {
+    setSavedLoading(true);
+    try {
+      const response = await fetch("/api/videos", { cache: "no-store" });
+      if (response.status === 401) {
+        setUser(null);
+        setSaved([]);
+        return;
+      }
+      const payload = (await response.json()) as { videos?: SavedVideoSummary[] };
+      setSaved(payload.videos ?? []);
+    } finally {
+      setSavedLoading(false);
+    }
+  }
+
+  function handleAuthenticated(nextUser: User) {
+    setUser(nextUser);
+    setPhase("compose");
+    setResult(null);
+    setError("");
+    void refreshVideos();
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    abortRef.current?.abort();
+    setUser(null);
+    setSaved([]);
+    setResult(null);
+    setPhase("compose");
+    flashToast("Signed out");
+  }
 
   async function submit() {
     if (!canSubmit) return;
@@ -313,18 +358,7 @@ export default function Home() {
       setActiveTab("style");
       setViewRaw(false);
       setPhase("done");
-
-      // Keep the finished analysis on the homepage list for later.
-      try {
-        saveConversation(finalResult, videoId);
-        setSaved(loadConversations());
-      } catch (saveError) {
-        flashToast(
-          saveError instanceof SavedConversationQuotaError
-            ? "Storage full — conversation not saved"
-            : "Could not save this conversation"
-        );
-      }
+      await refreshVideos();
     } catch (caught) {
       if (controller.signal.aborted) {
         setPhase("compose");
@@ -349,11 +383,18 @@ export default function Home() {
     setError("");
   }
 
-  /* Re-open a saved conversation straight into its result view. */
-  function openSavedConversation(conversation: SavedConversation) {
+  /* Re-open a saved video straight into its result view. */
+  async function openSavedVideo(video: SavedVideoSummary) {
     abortRef.current?.abort();
-    setUrl(conversation.sourceUrl);
-    setResult(conversation.result);
+    const response = await fetch(`/api/videos/${video.id}`, { cache: "no-store" });
+    if (!response.ok) {
+      flashToast(response.status === 404 ? "Video not found" : "Could not open video");
+      if (response.status === 401) setUser(null);
+      return;
+    }
+    const payload = (await response.json()) as { video: { result: AnalyzeResult; sourceUrl: string } };
+    setUrl(payload.video.sourceUrl);
+    setResult(payload.video.result);
     setActiveTab("style");
     setViewRaw(false);
     setLightbox(null);
@@ -363,9 +404,14 @@ export default function Home() {
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function removeSavedConversation(id: string) {
-    setSaved(deleteConversation(id));
-    flashToast("Conversation deleted");
+  async function removeSavedVideo(id: string) {
+    const response = await fetch(`/api/videos/${id}`, { method: "DELETE" });
+    if (response.status === 401) {
+      setUser(null);
+      return;
+    }
+    setSaved((videos) => videos.filter((video) => video.id !== id));
+    flashToast("Video deleted");
   }
 
   /* Text backing the active document tab. */
@@ -410,8 +456,16 @@ export default function Home() {
       <SiteHeader />
 
       <section className="stage">
-        {phase === "compose" ? (
+        {authLoading ? (
+          <div className="auth-shell">
+            <p className="auth-kicker">Loading account</p>
+          </div>
+        ) : !user ? (
+          <AuthView onAuthenticated={handleAuthenticated} />
+        ) : phase === "compose" ? (
           <ComposeView
+            user={user}
+            onLogout={logout}
             url={url}
             setUrl={setUrl}
             videoId={videoId}
@@ -429,8 +483,9 @@ export default function Home() {
             error={error}
             onSubmit={submit}
             saved={saved}
-            onOpenSaved={openSavedConversation}
-            onDeleteSaved={removeSavedConversation}
+            savedLoading={savedLoading}
+            onOpenSaved={openSavedVideo}
+            onDeleteSaved={removeSavedVideo}
           />
         ) : null}
 
@@ -488,10 +543,120 @@ export default function Home() {
 }
 
 /* ================================================================== *
+ * Auth                                                                *
+ * ================================================================== */
+
+function AuthView(props: { onAuthenticated: (user: User) => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const payload = (await response.json()) as { user?: User; error?: string };
+      if (!response.ok || !payload.user) throw new Error(payload.error || "Authentication failed.");
+      props.onAuthenticated(payload.user);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Authentication failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-copy">
+        <span className="hero-eyebrow">Private reference library</span>
+        <h1 className="hero-title">
+          Sign in to save every context pack to <em>your video archive</em>.
+        </h1>
+        <p className="hero-sub">
+          yt2ctx now keeps analyses in Postgres, tied to your account, so the homepage can reopen
+          past videos without relying on browser storage.
+        </p>
+      </div>
+
+      <form className="auth-form" onSubmit={submit}>
+        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <button
+            type="button"
+            className={mode === "login" ? "is-active" : ""}
+            onClick={() => {
+              setMode("login");
+              setError("");
+            }}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            className={mode === "signup" ? "is-active" : ""}
+            onClick={() => {
+              setMode("signup");
+              setError("");
+            }}
+          >
+            Create account
+          </button>
+        </div>
+
+        <label className="auth-field">
+          <span>Email</span>
+          <input
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+          />
+        </label>
+
+        <label className="auth-field">
+          <span>Password</span>
+          <input
+            type="password"
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            minLength={8}
+            required
+          />
+        </label>
+
+        {error ? (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <button type="submit" className="cta" disabled={busy}>
+          <span>{busy ? "Working..." : mode === "login" ? "Sign in" : "Create account"}</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 12h14M13 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* ================================================================== *
  * Compose                                                             *
  * ================================================================== */
 
 function ComposeView(props: {
+  user: User;
+  onLogout: () => void;
   url: string;
   setUrl: (value: string) => void;
   videoId: string | null;
@@ -508,8 +673,9 @@ function ComposeView(props: {
   canSubmit: boolean;
   error: string;
   onSubmit: () => void;
-  saved: SavedConversation[];
-  onOpenSaved: (conversation: SavedConversation) => void;
+  saved: SavedVideoSummary[];
+  savedLoading: boolean;
+  onOpenSaved: (video: SavedVideoSummary) => void;
   onDeleteSaved: (id: string) => void;
 }) {
   const hasInput = props.url.trim().length > 0;
@@ -519,6 +685,16 @@ function ComposeView(props: {
 
   return (
     <div className="compose">
+      <div className="account-bar">
+        <div>
+          <span className="account-kicker">Signed in</span>
+          <strong>{props.user.email}</strong>
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onLogout}>
+          Sign out
+        </button>
+      </div>
+
       <div className="compose-hero">
         <span className="hero-eyebrow">Reference cinema → executable grammar</span>
         <h1 className="hero-title">
@@ -679,13 +855,12 @@ function ComposeView(props: {
         </button>
       </div>
 
-      {props.saved.length > 0 ? (
-        <SavedList
-          saved={props.saved}
-          onOpen={props.onOpenSaved}
-          onDelete={props.onDeleteSaved}
-        />
-      ) : null}
+      <SavedList
+        saved={props.saved}
+        loading={props.savedLoading}
+        onOpen={props.onOpenSaved}
+        onDelete={props.onDeleteSaved}
+      />
 
       <div className="feature-row">
         <Feature title="Frames that matter" body="Vision salience, novelty, and transcript density pick the representative stills." />
@@ -697,11 +872,12 @@ function ComposeView(props: {
 }
 
 /* ================================================================== *
- * Saved conversations                                                 *
+ * Saved videos                                                        *
  * ================================================================== */
 
-function formatSavedAt(ms: number): string {
-  const date = new Date(ms);
+function formatSavedAt(value: string): string {
+  const date = new Date(value);
+  const ms = date.getTime();
   const now = Date.now();
   const dayMs = 86_400_000;
   if (now - ms < dayMs && date.getDate() === new Date(now).getDate()) {
@@ -714,36 +890,43 @@ function formatSavedAt(ms: number): string {
 }
 
 function SavedList(props: {
-  saved: SavedConversation[];
-  onOpen: (conversation: SavedConversation) => void;
+  saved: SavedVideoSummary[];
+  loading: boolean;
+  onOpen: (video: SavedVideoSummary) => void;
   onDelete: (id: string) => void;
 }) {
   return (
-    <section className="saved" aria-label="Saved conversations">
+    <section className="saved" aria-label="Saved videos">
       <div className="saved-head">
-        <h2 className="saved-title">Saved conversations</h2>
-        <span className="saved-count">{props.saved.length}</span>
+        <h2 className="saved-title">Your videos</h2>
+        <span className="saved-count">{props.loading ? "Syncing" : props.saved.length}</span>
       </div>
-      <ul className="saved-list">
-        {props.saved.map((conversation) => (
-          <SavedRow
-            key={conversation.id}
-            conversation={conversation}
-            onOpen={props.onOpen}
-            onDelete={props.onDelete}
-          />
-        ))}
-      </ul>
+      {props.saved.length > 0 ? (
+        <ul className="saved-list">
+          {props.saved.map((video) => (
+            <SavedRow
+              key={video.id}
+              video={video}
+              onOpen={props.onOpen}
+              onDelete={props.onDelete}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="saved-empty">
+          {props.loading ? "Loading your saved videos..." : "No saved videos yet. Analyze one to start your library."}
+        </p>
+      )}
     </section>
   );
 }
 
 function SavedRow(props: {
-  conversation: SavedConversation;
-  onOpen: (conversation: SavedConversation) => void;
+  video: SavedVideoSummary;
+  onOpen: (video: SavedVideoSummary) => void;
   onDelete: (id: string) => void;
 }) {
-  const { conversation } = props;
+  const { video } = props;
   const [thumbOk, setThumbOk] = useState(true);
   const [confirming, setConfirming] = useState(false);
 
@@ -752,12 +935,12 @@ function SavedRow(props: {
       <button
         type="button"
         className="saved-open"
-        onClick={() => props.onOpen(conversation)}
+        onClick={() => props.onOpen(video)}
       >
-        {conversation.videoId && thumbOk ? (
+        {video.videoId && thumbOk ? (
           <img
             className="saved-thumb"
-            src={thumbnailUrl(conversation.videoId)}
+            src={thumbnailUrl(video.videoId)}
             alt=""
             onError={() => setThumbOk(false)}
           />
@@ -765,12 +948,12 @@ function SavedRow(props: {
           <span className="saved-thumb saved-thumb--placeholder" aria-hidden="true" />
         )}
         <span className="saved-body">
-          <span className="saved-name">{conversation.title}</span>
+          <span className="saved-name">{video.title}</span>
           <span className="saved-meta">
-            {conversation.uploader ? `${conversation.uploader} · ` : ""}
-            {formatTimestamp(conversation.durationSeconds)} · {conversation.frameCount} frames
+            {video.uploader ? `${video.uploader} · ` : ""}
+            {formatTimestamp(video.durationSeconds)} · {video.frameCount} frames
           </span>
-          <span className="saved-stamp">{formatSavedAt(conversation.savedAt)}</span>
+          <span className="saved-stamp">{formatSavedAt(video.createdAt)}</span>
         </span>
       </button>
       {confirming ? (
@@ -778,7 +961,7 @@ function SavedRow(props: {
           <button
             type="button"
             className="saved-confirm-yes"
-            onClick={() => props.onDelete(conversation.id)}
+            onClick={() => props.onDelete(video.id)}
           >
             Delete
           </button>
@@ -795,7 +978,7 @@ function SavedRow(props: {
           type="button"
           className="saved-delete"
           onClick={() => setConfirming(true)}
-          aria-label={`Delete saved conversation: ${conversation.title}`}
+          aria-label={`Delete saved video: ${video.title}`}
         >
           ✕
         </button>

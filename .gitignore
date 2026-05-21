@@ -8,3 +8,4 @@ dist
 .yt2ctx-*
 *.tsbuildinfo
 .vercel
+.env*.local

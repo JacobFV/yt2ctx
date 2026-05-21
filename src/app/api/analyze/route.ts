@@ -4,9 +4,12 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 
+import type { AnalyzeResult, Frame } from "../../result-types";
 import { analyzeYoutubeVideo } from "../../../core/analyze";
 import { attachFrameDataUrls } from "../../../core/render";
 import type { ProgressEvent } from "../../../core/types";
+import { requireUser, type User } from "../../../server/auth";
+import { saveVideo } from "../../../server/videos";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -54,6 +57,7 @@ const API_INFO = {
   },
   notes: [
     "Requires OPENAI_API_KEY configured on the server.",
+    "Requires an authenticated web session; completed analyses are saved to the signed-in user's Postgres video library.",
     "maxDuration is 300s; long videos are better processed via the CLI or MCP server.",
     "Only analyze videos you have the right to download."
   ]
@@ -71,6 +75,29 @@ const requestSchema = z.object({
 });
 
 type AnalyzeRequest = z.infer<typeof requestSchema>;
+
+const ID_PATTERN = /^[\w-]{11}$/;
+
+function parseYouTubeId(input: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.replace(/^www\./, "");
+  if (host === "youtu.be") {
+    const id = parsed.pathname.slice(1).split("/")[0];
+    return ID_PATTERN.test(id) ? id : null;
+  }
+  if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+    const v = parsed.searchParams.get("v");
+    if (v && ID_PATTERN.test(v)) return v;
+    const match = parsed.pathname.match(/\/(?:shorts|embed|live|v)\/([\w-]{11})/);
+    if (match) return match[1];
+  }
+  return null;
+}
 
 function messageOf(error: unknown): string {
   if (error instanceof z.ZodError) {
@@ -92,14 +119,14 @@ function messageOf(error: unknown): string {
 async function runAnalysis(
   body: AnalyzeRequest,
   onProgress?: (event: ProgressEvent) => void
-) {
+): Promise<AnalyzeResult> {
   const result = await analyzeYoutubeVideo({
     ...body,
     // Vercel and most hosts only allow writes under the OS temp dir.
     outputDir: path.join(os.tmpdir(), "yt2ctx-web"),
     onProgress
   });
-  const frames = await attachFrameDataUrls(result.frames);
+  const frames = (await attachFrameDataUrls(result.frames)) as Frame[];
   const zipBuffer = await readFile(result.artifacts.zipPath);
   return {
     ...result,
@@ -124,6 +151,13 @@ export function GET() {
  *    which is the simplest thing for headless agents to consume.
  */
 export async function POST(request: Request) {
+  let user: User;
+  try {
+    user = await requireUser(request);
+  } catch {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+
   let body: AnalyzeRequest;
   try {
     body = requestSchema.parse(await request.json());
@@ -137,7 +171,9 @@ export async function POST(request: Request) {
 
   if (!wantsStream) {
     try {
-      return NextResponse.json(await runAnalysis(body));
+      const result = await runAnalysis(body);
+      const video = await saveVideo(user, result, parseYouTubeId(body.url));
+      return NextResponse.json({ ...result, savedVideoId: video.id });
     } catch (error) {
       return NextResponse.json({ error: messageOf(error) }, { status: 400 });
     }
@@ -158,7 +194,8 @@ export async function POST(request: Request) {
 
       try {
         const payload = await runAnalysis(body, (event) => send({ type: "progress", ...event }));
-        send({ type: "result", result: payload });
+        const video = await saveVideo(user, payload, parseYouTubeId(body.url));
+        send({ type: "result", result: { ...payload, savedVideoId: video.id } });
       } catch (error) {
         send({ type: "error", message: messageOf(error) });
       } finally {

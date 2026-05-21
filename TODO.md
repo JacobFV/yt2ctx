@@ -2,22 +2,22 @@
 
 ## Make the hosted web app safe to expose publicly
 
-> **The problem.** `POST /api/analyze` runs the full pipeline with **no
-> authentication**. Every call spends real money: OpenAI transcription, one
+> **Current state.** `POST /api/analyze` is gated behind first-party
+> email/password authentication and saves completed analyses to Neon Postgres.
+> Every authenticated call still spends real money: OpenAI transcription, one
 > vision call per candidate frame (up to 36), embeddings, and a large
 > grammar-compilation call — roughly **$0.05–0.30 per analysis** — plus Vercel
-> function compute (300 s Node functions on Active-CPU pricing). A public,
-> unauthenticated URL is an open wallet: one bot or one shared link can run
-> thousands of analyses overnight.
+> function compute (300 s Node functions on Active-CPU pricing). A public
+> signup flow still needs quotas and abuse controls before wide distribution.
 >
 > **Scope.** This only affects the **hosted web deployment**. The CLI and MCP
 > server run on the *caller's own* `OPENAI_API_KEY`, so they carry no spend
 > exposure and stay free and unrestricted. Everything below is about gating the
 > web app.
 
-The goal: gate the hosted app behind **Google OAuth + Stripe subscriptions**
-with per-user quotas and hard cost ceilings, so spend is always bounded and
-attributable.
+The goal: add per-user quotas and hard cost ceilings, then optionally upgrade
+the first-party auth flow to **Google OAuth + Stripe subscriptions**, so spend
+is always bounded and attributable.
 
 ---
 
@@ -34,26 +34,27 @@ Cheap protections that work even before auth exists.
 - [ ] Enable Vercel BotID / Attack Challenge on the analyze route.
 - [ ] Add a cost estimate to the result payload and log per-request spend.
 
-### Phase 1 — Authentication (Google OAuth)
+### Phase 1 — Authentication
 
-- [ ] Add **Auth.js (NextAuth v5)** with the Google provider
+- [x] Add first-party email/password accounts with HttpOnly Postgres-backed sessions.
+- [x] Add sign-in / sign-out UI; gate the composer behind a signed-in session.
+- [x] Reject unauthenticated `POST /api/analyze` with `401`.
+- [ ] Optional: add **Auth.js (NextAuth v5)** with the Google provider
       (`@auth/core` + `next-auth`). Configure the Google OAuth client
       (consent screen, authorized redirect URIs).
-- [ ] Add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `AUTH_SECRET` to env
+- [ ] Optional: add `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `AUTH_SECRET` to env
       and to Vercel project settings; document them in `.env.example`.
-- [ ] Add sign-in / sign-out UI to the masthead; gate the composer behind a
-      signed-in session.
-- [ ] Reject unauthenticated `POST /api/analyze` with `401`.
 - [ ] _Decision:_ Auth.js (no vendor, OSS-friendly) vs. Clerk (faster, native
       Vercel Marketplace integration). Default recommendation: **Auth.js**.
 
 ### Phase 2 — Persistence & usage metering
 
-- [ ] Provision a database — **Neon Postgres** via the Vercel Marketplace
+- [x] Provision a database — **Neon Postgres** via the Vercel Marketplace
       (or Upstash Redis if only counters are needed).
-- [ ] Schema: `users`, `analyses` (user, url, cost estimate, created_at),
-      `usage` (user, period, count, spend).
-- [ ] Record every analysis and its estimated cost.
+- [x] Schema: `users`, `sessions`, `videos`.
+- [x] Save every completed analysis payload to the signed-in user's video library.
+- [ ] Add usage tables for period counts and estimated spend.
+- [ ] Record every analysis cost estimate.
 - [ ] Enforce a **free-tier quota** server-side *before* starting the pipeline
       (e.g. 3 analyses / month); return `402` when exhausted.
 - [ ] Surface remaining quota in the UI.
@@ -97,7 +98,7 @@ Cheap protections that work even before auth exists.
 
 ## Smaller follow-ups
 
-- [ ] Persisted job history so a completed analysis can be revisited by `id`.
+- [x] Persisted job history so a completed analysis can be revisited by `id`.
 - [ ] Resumable / re-connectable streaming if a client drops mid-run.
 - [ ] An OG image for link previews.
 - [ ] Tests for the core pipeline and the streaming route.

@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------ *
  * The slice of the /api/analyze payload the web UI actually touches.   *
- * Shared by the page component and the saved-conversation store.       *
+ * Shared by the page component, API routes, and database row helpers.  *
  * ------------------------------------------------------------------ */
 
 export type Frame = {
@@ -23,6 +23,7 @@ export type SlopWarning = {
 
 export type AnalyzeResult = {
   id: string;
+  savedVideoId?: string;
   sourceUrl: string;
   metadata: { title?: string; uploader?: string; durationSeconds: number };
   options: { visionModel: string; mode: string; topK: number };
@@ -36,4 +37,25 @@ export type AnalyzeResult = {
     shotSpecs?: unknown[];
   };
   zipDataUrl: string;
+};
+
+export type User = {
+  id: string;
+  email: string;
+};
+
+export type SavedVideoSummary = {
+  id: string;
+  analysisId: string;
+  sourceUrl: string;
+  videoId: string | null;
+  title: string;
+  uploader?: string;
+  durationSeconds: number;
+  frameCount: number;
+  createdAt: string;
+};
+
+export type SavedVideo = SavedVideoSummary & {
+  result: AnalyzeResult;
 };

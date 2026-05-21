@@ -86,6 +86,7 @@ URL ─▶ download ─▶ audio ─▶ transcribe ─▶ sample frames ─▶ v
 
 - **Node.js 20+**
 - An **`OPENAI_API_KEY`**
+- A Postgres **`DATABASE_URL`** for the authenticated web app
 - Network access to YouTube and OpenAI
 
 `ffmpeg` and `ffprobe` are bundled — no system install required.
@@ -98,7 +99,7 @@ cd yt2ctx
 npm install
 
 cp .env.example .env
-# open .env and set OPENAI_API_KEY
+# open .env and set OPENAI_API_KEY and DATABASE_URL
 
 npm run dev        # web app at http://localhost:3000
 ```
@@ -148,13 +149,14 @@ committed.
 npm run dev
 ```
 
-Open `http://localhost:3000`, paste a YouTube URL, and run analysis. The
-interface is a single editorial experience — *"The Reference Monograph"* — styled
-as a printed film publication: warm paper, ink, one printer's red, and the two
-moments you *watch* (the processing frame and the lightbox) drop to theater
-black.
+Open `http://localhost:3000`, create an account or sign in, paste a YouTube URL,
+and run analysis. The interface is a single editorial experience — *"The
+Reference Monograph"* — styled as a printed film publication: warm paper, ink,
+one printer's red, and the two moments you *watch* (the processing frame and the
+lightbox) drop to theater black.
 
 - a **URL composer** that detects the video and shows its thumbnail before you run
+- **account auth** with HttpOnly sessions and a Postgres-backed video library
 - a collapsible **Tuning** panel for frame count, selection mode, and sampling
 - **live pipeline progress** — every stage reports in real time with an overall
   percentage, an elapsed clock, and per-frame counts, instead of a blind spinner
@@ -299,8 +301,10 @@ image content, and also writes the full artifact set to disk.
 ## HTTP API
 
 `GET /api/analyze` returns the endpoint contract as JSON, so the API is
-self-documenting. `POST /api/analyze` runs the pipeline and **content-negotiates**
-its response so the same endpoint serves the browser and headless agents:
+self-documenting. `POST /api/analyze` requires an authenticated web session,
+runs the pipeline, saves the completed analysis to the signed-in user's Postgres
+video library, and **content-negotiates** its response so the same endpoint
+serves the browser and headless agents:
 
 - **`Accept: application/x-ndjson`** — streams newline-delimited JSON. Zero or
   more `{"type":"progress","stage":"vision","pct":0.71,...}` events, then one
@@ -389,6 +393,7 @@ Environment variables (see `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENAI_API_KEY` | *(required)* | Your OpenAI API key. |
+| `DATABASE_URL` | *(required for web)* | Postgres connection string for accounts, sessions, and saved video analyses. |
 | `OPENAI_TRANSCRIBE_MODEL` | `whisper-1` | Transcription model. |
 | `OPENAI_VISION_MODEL` | `gpt-4.1-mini` | Vision + grammar model. |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model. |
@@ -403,15 +408,17 @@ This repo is intended to deploy through a linked GitHub repository on Vercel.
 Push to the configured production branch and let Vercel build automatically.
 
 Set `OPENAI_API_KEY` in the Vercel project settings before relying on automatic
-deployments. The analyze route is configured for the Node.js runtime with a 300
-second function duration. Serverless limits still apply — long videos are better
-processed through the CLI or MCP server; short videos and clips fit the hosted
-web path.
+deployments. The web app also requires `DATABASE_URL`; the project is designed
+to use a Vercel Marketplace Postgres provider such as Neon, which injects the
+connection environment variables when connected to the project. The analyze
+route is configured for the Node.js runtime with a 300 second function duration.
+Serverless limits still apply — long videos are better processed through the CLI
+or MCP server; short videos and clips fit the hosted web path.
 
 > [!IMPORTANT]
-> The hosted web app currently runs the pipeline **without authentication**.
-> Each analysis costs real OpenAI usage. Before exposing a public deployment,
-> add auth and usage limits — see [`TODO.md`](./TODO.md).
+> The hosted web app requires authentication, but each analysis still costs real
+> OpenAI usage. Before widening access to a public deployment, add usage limits
+> and billing controls — see [`TODO.md`](./TODO.md).
 
 ## Roadmap
 
