@@ -27,6 +27,14 @@ export type AnalyzeResult = {
   createdAt: string;
   savedVideoId?: string;
   sourceUrl: string;
+  extractionKind?: "text" | "full";
+  billing?: {
+    freeQuotaUsed: boolean;
+    creditsSpentCents: number;
+    estimatedCostCents: number;
+    remainingFree: number;
+    creditBalanceCents: number;
+  };
   metadata: { title?: string; uploader?: string; durationSeconds: number };
   options: { visionModel: string; mode: string; topK: number };
   markdown: string;
@@ -46,6 +54,28 @@ export type AnalyzeResult = {
 export type User = {
   id: string;
   email: string;
+  stripeCustomerId?: string | null;
+};
+
+export type BillingSummary = {
+  account: {
+    creditBalanceCents: number;
+    autoRefillEnabled: boolean;
+    autoRefillThresholdCents: number;
+    autoRefillAmountCents: number;
+    recurringEnabled: boolean;
+    stripeSubscriptionId?: string;
+    stripePaymentMethodId?: string;
+  } | null;
+  free: {
+    anonymousTextRemaining: number;
+    authenticatedTextRemaining: number;
+    authenticatedFullRemaining: number;
+  };
+  prices: {
+    text: number;
+    full: number;
+  };
 };
 
 export type SavedVideoSummary = {

@@ -5,7 +5,14 @@ import type { FormEvent } from "react";
 
 import { STAGE_PLAN } from "../core/progress";
 import type { ProgressEvent } from "../core/types";
-import type { AnalyzeResult, Frame, SavedVideoSummary, SlopWarning, User } from "./result-types";
+import type {
+  AnalyzeResult,
+  BillingSummary,
+  Frame,
+  SavedVideoSummary,
+  SlopWarning,
+  User
+} from "./result-types";
 import { SiteFooter, SiteHeader } from "./site-chrome";
 
 type Phase = "compose" | "running" | "done";
@@ -168,12 +175,14 @@ const TAB_FILES: Partial<Record<ResultTab, string>> = {
 export default function Home() {
   // Auth state
   const [user, setUser] = useState<User | null>(null);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   // Form state
   const [url, setUrl] = useState("");
   const [topK, setTopK] = useState(8);
   const [mode, setMode] = useState<"density" | "top-k">("density");
+  const [extractionKind, setExtractionKind] = useState<"text" | "full">("text");
   const [candidateIntervalSeconds, setCandidateIntervalSeconds] = useState(8);
   const [maxCandidateFrames, setMaxCandidateFrames] = useState(36);
   const [tuningOpen, setTuningOpen] = useState(false);
@@ -208,9 +217,11 @@ export default function Home() {
     (async () => {
       try {
         const response = await fetch("/api/me", { cache: "no-store" });
-        const payload = (await response.json()) as { user: User | null };
+        const payload = (await response.json()) as { user: User | null; billing: BillingSummary };
         if (!alive) return;
         setUser(payload.user);
+        setBilling(payload.billing);
+        setExtractionKind(payload.user ? "full" : "text");
         if (payload.user) await refreshVideos();
       } finally {
         if (alive) setAuthLoading(false);
@@ -261,6 +272,7 @@ export default function Home() {
       const response = await fetch("/api/videos", { cache: "no-store" });
       if (response.status === 401) {
         setUser(null);
+        setExtractionKind("text");
         setSaved([]);
         return;
       }
@@ -273,6 +285,7 @@ export default function Home() {
 
   function handleAuthenticated(nextUser: User) {
     setUser(nextUser);
+    setExtractionKind("full");
     setPhase("compose");
     setResult(null);
     setError("");
@@ -283,6 +296,8 @@ export default function Home() {
     await fetch("/api/auth/logout", { method: "POST" });
     abortRef.current?.abort();
     setUser(null);
+    setBilling(null);
+    setExtractionKind("text");
     setSaved([]);
     setResult(null);
     setPhase("compose");
@@ -310,6 +325,7 @@ export default function Home() {
           url,
           topK,
           mode,
+          extractionKind,
           candidateIntervalSeconds,
           maxCandidateFrames,
           frameWidth: 768
@@ -354,10 +370,12 @@ export default function Home() {
       if (buffer.trim()) consume(buffer);
 
       if (!finalResult) throw new Error("The analysis stream ended without a result.");
-      setResult(finalResult);
-      setActiveTab("style");
+      const completedResult = finalResult as AnalyzeResult;
+      setResult(completedResult);
+      setActiveTab(completedResult.extractionKind === "text" ? "watch" : "style");
       setViewRaw(false);
       setPhase("done");
+      await refreshBilling();
       await refreshVideos();
     } catch (caught) {
       if (controller.signal.aborted) {
@@ -414,6 +432,53 @@ export default function Home() {
     flashToast("Video deleted");
   }
 
+  async function refreshBilling() {
+    const response = await fetch("/api/me", { cache: "no-store" });
+    const payload = (await response.json()) as { user: User | null; billing: BillingSummary };
+    setUser(payload.user);
+    setBilling(payload.billing);
+  }
+
+  async function startCheckout(action: "credits" | "recurring" | "setup", packId?: "starter" | "studio") {
+    const response = await fetch("/api/billing/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, packId })
+    });
+    const payload = (await response.json()) as { url?: string; error?: string };
+    if (!response.ok || !payload.url) {
+      flashToast(payload.error || "Billing could not start");
+      return;
+    }
+    window.location.href = payload.url;
+  }
+
+  async function openBillingPortal() {
+    const response = await fetch("/api/billing/portal", { method: "POST" });
+    const payload = (await response.json()) as { url?: string; error?: string };
+    if (!response.ok || !payload.url) {
+      flashToast(payload.error || "Billing portal unavailable");
+      return;
+    }
+    window.location.href = payload.url;
+  }
+
+  async function updateBillingSettings(settings: {
+    autoRefillEnabled?: boolean;
+    recurringEnabled?: boolean;
+  }) {
+    const response = await fetch("/api/billing/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings)
+    });
+    if (!response.ok) {
+      flashToast("Billing settings were not updated");
+      return;
+    }
+    await refreshBilling();
+  }
+
   /* Text backing the active document tab. */
   const activeText = useMemo(() => {
     if (!result) return "";
@@ -461,15 +526,17 @@ export default function Home() {
             <span className="auth-loading-spin" aria-hidden="true" />
             <span>Loading your account</span>
           </div>
-        ) : !user ? (
-          <AuthView onAuthenticated={handleAuthenticated} />
         ) : phase === "compose" ? (
           <ComposeView
             user={user}
+            billing={billing}
             onLogout={logout}
+            onAuthenticated={handleAuthenticated}
             url={url}
             setUrl={setUrl}
             videoId={videoId}
+            extractionKind={extractionKind}
+            setExtractionKind={setExtractionKind}
             topK={topK}
             setTopK={setTopK}
             mode={mode}
@@ -487,6 +554,9 @@ export default function Home() {
             savedLoading={savedLoading}
             onOpenSaved={openSavedVideo}
             onDeleteSaved={removeSavedVideo}
+            onCheckout={startCheckout}
+            onPortal={openBillingPortal}
+            onBillingSettings={updateBillingSettings}
           />
         ) : null}
 
@@ -562,7 +632,7 @@ const AUTH_POINTS = [
   }
 ];
 
-function AuthView(props: { onAuthenticated: (user: User) => void }) {
+const _AuthView = function AuthView(props: { onAuthenticated: (user: User) => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -714,18 +784,22 @@ function AuthView(props: { onAuthenticated: (user: User) => void }) {
       </form>
     </div>
   );
-}
+};
 
 /* ================================================================== *
  * Compose                                                             *
  * ================================================================== */
 
 function ComposeView(props: {
-  user: User;
+  user: User | null;
+  billing: BillingSummary | null;
   onLogout: () => void;
+  onAuthenticated: (user: User) => void;
   url: string;
   setUrl: (value: string) => void;
   videoId: string | null;
+  extractionKind: "text" | "full";
+  setExtractionKind: (value: "text" | "full") => void;
   topK: number;
   setTopK: (value: number) => void;
   mode: "density" | "top-k";
@@ -743,6 +817,9 @@ function ComposeView(props: {
   savedLoading: boolean;
   onOpenSaved: (video: SavedVideoSummary) => void;
   onDeleteSaved: (id: string) => void;
+  onCheckout: (action: "credits" | "recurring" | "setup", packId?: "starter" | "studio") => void;
+  onPortal: () => void;
+  onBillingSettings: (settings: { autoRefillEnabled?: boolean; recurringEnabled?: boolean }) => void;
 }) {
   const hasInput = props.url.trim().length > 0;
   const showHint = hasInput && !props.videoId;
@@ -753,12 +830,14 @@ function ComposeView(props: {
     <div className="compose">
       <div className="account-bar">
         <div>
-          <span className="account-kicker">Signed in</span>
-          <strong>{props.user.email}</strong>
+          <span className="account-kicker">{props.user ? "Signed in" : "Guest access"}</span>
+          <strong>{props.user?.email ?? "Text-only trial"}</strong>
         </div>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onLogout}>
-          Sign out
-        </button>
+        {props.user ? (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={props.onLogout}>
+            Sign out
+          </button>
+        ) : null}
       </div>
 
       <div className="compose-hero">
@@ -822,6 +901,34 @@ function ComposeView(props: {
         {showHint ? (
           <p className="hint">That does not look like a YouTube link yet — paste a full video URL.</p>
         ) : null}
+
+        <div className="extract-mode" role="group" aria-label="Extraction type">
+          <button
+            type="button"
+            className={`extract-mode-btn ${props.extractionKind === "text" ? "is-active" : ""}`}
+            onClick={() => props.setExtractionKind("text")}
+          >
+            <strong>Text only</strong>
+            <span>
+              {props.user
+                ? `${props.billing?.free.authenticatedTextRemaining ?? 0} free left`
+                : `${props.billing?.free.anonymousTextRemaining ?? 0} free left`}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`extract-mode-btn ${props.extractionKind === "full" ? "is-active" : ""}`}
+            onClick={() => props.user && props.setExtractionKind("full")}
+            disabled={!props.user}
+          >
+            <strong>Full context</strong>
+            <span>
+              {props.user
+                ? `${props.billing?.free.authenticatedFullRemaining ?? 0} free left`
+                : "Sign in required"}
+            </span>
+          </button>
+        </div>
 
         <button
           type="button"
@@ -921,12 +1028,23 @@ function ComposeView(props: {
         </button>
       </div>
 
-      <SavedList
-        saved={props.saved}
-        loading={props.savedLoading}
-        onOpen={props.onOpenSaved}
-        onDelete={props.onDeleteSaved}
+      <BillingPanel
+        user={props.user}
+        billing={props.billing}
+        onCheckout={props.onCheckout}
+        onPortal={props.onPortal}
+        onBillingSettings={props.onBillingSettings}
+        onAuthenticated={props.onAuthenticated}
       />
+
+      {props.user ? (
+        <SavedList
+          saved={props.saved}
+          loading={props.savedLoading}
+          onOpen={props.onOpenSaved}
+          onDelete={props.onDeleteSaved}
+        />
+      ) : null}
 
       <div className="feature-row">
         <Feature title="Frames that matter" body="Vision salience, novelty, and transcript density pick the representative stills." />
@@ -1059,6 +1177,125 @@ function Feature({ title, body }: { title: string; body: string }) {
       <h3>{title}</h3>
       <p>{body}</p>
     </div>
+  );
+}
+
+function money(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function BillingPanel(props: {
+  user: User | null;
+  billing: BillingSummary | null;
+  onCheckout: (action: "credits" | "recurring" | "setup", packId?: "starter" | "studio") => void;
+  onPortal: () => void;
+  onBillingSettings: (settings: { autoRefillEnabled?: boolean; recurringEnabled?: boolean }) => void;
+  onAuthenticated: (user: User) => void;
+}) {
+  const account = props.billing?.account;
+  if (!props.user) {
+    return (
+      <section className="billing-panel">
+        <div className="billing-copy">
+          <span className="billing-kicker">Guest quota</span>
+          <strong>{props.billing?.free.anonymousTextRemaining ?? 0} text-only extractions left</strong>
+          <p>Sign in for 100 free text-only extractions, 10 free full context extractions, credits, and saved videos.</p>
+        </div>
+        <AuthMini onAuthenticated={props.onAuthenticated} />
+      </section>
+    );
+  }
+
+  return (
+    <section className="billing-panel">
+      <div className="billing-copy">
+        <span className="billing-kicker">Credits</span>
+        <strong>{money(account?.creditBalanceCents ?? 0)} balance</strong>
+        <p>
+          Free left: {props.billing?.free.authenticatedTextRemaining ?? 0} text-only ·{" "}
+          {props.billing?.free.authenticatedFullRemaining ?? 0} full. Paid runs cost{" "}
+          {money(props.billing?.prices.text ?? 0)} text-only or {money(props.billing?.prices.full ?? 0)} full.
+        </p>
+      </div>
+      <div className="billing-actions">
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => props.onCheckout("credits", "starter")}>
+          Buy $5 credits
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => props.onCheckout("credits", "studio")}>
+          Buy $20 credits
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => props.onCheckout("setup")}>
+          Add card
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => props.onCheckout("recurring")}>
+          Monthly refill
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onPortal}>
+          Billing portal
+        </button>
+      </div>
+      <div className="billing-toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={Boolean(account?.autoRefillEnabled)}
+            onChange={(event) => props.onBillingSettings({ autoRefillEnabled: event.target.checked })}
+          />
+          <span>Auto-refill below {money(account?.autoRefillThresholdCents ?? 200)}</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={Boolean(account?.recurringEnabled)}
+            onChange={(event) => props.onBillingSettings({ recurringEnabled: event.target.checked })}
+          />
+          <span>Recurring payments enabled</span>
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function AuthMini(props: { onAuthenticated: (user: User) => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("signup");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      const response = await fetch(`/api/auth/${mode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const payload = (await response.json()) as { user?: User; error?: string };
+      if (!response.ok || !payload.user) throw new Error(payload.error || "Authentication failed.");
+      props.onAuthenticated(payload.user);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Authentication failed.");
+    }
+  }
+
+  return (
+    <form className="auth-mini" onSubmit={submit}>
+      <div className="auth-mini-tabs">
+        <button type="button" className={mode === "signup" ? "is-active" : ""} onClick={() => setMode("signup")}>
+          Sign up
+        </button>
+        <button type="button" className={mode === "login" ? "is-active" : ""} onClick={() => setMode("login")}>
+          Log in
+        </button>
+      </div>
+      <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" type="email" />
+      <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
+      {error ? <p className="auth-mini-error">{error}</p> : null}
+      <button type="submit" className="btn btn-primary btn-sm">
+        Continue
+      </button>
+    </form>
   );
 }
 

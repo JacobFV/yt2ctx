@@ -916,6 +916,137 @@ a {
   animation: rise 0.26s var(--ease) both;
 }
 
+.extract-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.extract-mode-btn {
+  min-height: 72px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 5px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.extract-mode-btn span {
+  color: var(--ink-3);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.extract-mode-btn.is-active {
+  border-color: var(--spot);
+  background: var(--paper-warm);
+}
+
+.extract-mode-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.billing-panel {
+  margin-top: 18px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.billing-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.billing-kicker {
+  color: var(--ink-3);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.billing-copy strong {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.billing-copy p {
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.billing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.billing-toggles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.billing-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.auth-mini {
+  display: grid;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.auth-mini-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1px solid var(--rule);
+}
+
+.auth-mini-tabs button {
+  border: 0;
+  background: transparent;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.auth-mini-tabs button.is-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.auth-mini input {
+  width: 100%;
+  border: 1px solid var(--rule);
+  padding: 10px 11px;
+  background: white;
+}
+
+.auth-mini-error {
+  margin: 0;
+  color: var(--spot);
+  font-size: 12px;
+}
+
 .control {
   display: flex;
   flex-direction: column;

@@ -18,19 +18,25 @@ export function renderMarkdown(params: {
   if (params.metadata.uploader) lines.push(`Uploader: ${params.metadata.uploader}`);
   lines.push(`Duration: ${formatTimestamp(params.metadata.durationSeconds)}`);
   lines.push("");
-  lines.push("Generated artifacts: `watch.md`, `style-bible.md`, `shot-specs.md`, `shot-specs.json`, `codex-prompt.md`, selected frame JPGs, and a ZIP bundle.");
+  if (params.frames.length > 0) {
+    lines.push("Generated artifacts: `watch.md`, `style-bible.md`, `shot-specs.md`, `shot-specs.json`, `codex-prompt.md`, selected frame JPGs, and a ZIP bundle.");
+  } else {
+    lines.push("Generated artifacts: `watch.md`, transcript segments, metadata, and a ZIP bundle.");
+  }
   lines.push("");
-  lines.push("## Representative frames");
-  lines.push("");
-  for (const frame of params.frames) {
-    lines.push(
-      `### Frame ${frame.index + 1} - ${formatTimestamp(frame.timestamp)} - score ${frame.score.toFixed(3)}`
-    );
-    lines.push(`File: ${frame.fileName}`);
-    lines.push(`Description: ${frame.description}`);
-    if (frame.labels.length) lines.push(`Tags: ${frame.labels.join(", ")}`);
-    if (frame.transcriptContext) lines.push(`Nearby transcript: ${frame.transcriptContext}`);
+  if (params.frames.length > 0) {
+    lines.push("## Representative frames");
     lines.push("");
+    for (const frame of params.frames) {
+      lines.push(
+        `### Frame ${frame.index + 1} - ${formatTimestamp(frame.timestamp)} - score ${frame.score.toFixed(3)}`
+      );
+      lines.push(`File: ${frame.fileName}`);
+      lines.push(`Description: ${frame.description}`);
+      if (frame.labels.length) lines.push(`Tags: ${frame.labels.join(", ")}`);
+      if (frame.transcriptContext) lines.push(`Nearby transcript: ${frame.transcriptContext}`);
+      lines.push("");
+    }
   }
   lines.push("## Transcript");
   lines.push("");

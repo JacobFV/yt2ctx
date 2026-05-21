@@ -1,5 +1,6 @@
 export type FrameSelectionMode = "top-k" | "density";
 export type OutputMode = "watch" | "style" | "prompt" | "shot-specs" | "all";
+export type ExtractionKind = "text" | "full";
 
 export type AnalyzeVideoOptions = {
   url: string;
@@ -8,6 +9,7 @@ export type AnalyzeVideoOptions = {
   mode?: FrameSelectionMode;
   selectionMode?: FrameSelectionMode;
   outputMode?: OutputMode;
+  extractionKind?: ExtractionKind;
   candidateIntervalSeconds?: number;
   maxCandidateFrames?: number;
   frameWidth?: number;
@@ -173,6 +175,7 @@ export type VideoAnalysisResult = {
   id: string;
   createdAt: string;
   sourceUrl: string;
+  extractionKind: ExtractionKind;
   metadata: VideoMetadata;
   options: Required<
     Pick<

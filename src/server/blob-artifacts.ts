@@ -60,6 +60,7 @@ export async function uploadAnalysisArtifacts(
     id: result.id,
     createdAt: result.createdAt,
     sourceUrl: result.sourceUrl,
+    extractionKind: result.extractionKind,
     metadata: result.metadata,
     options: result.options,
     markdown: result.markdown,

@@ -11,6 +11,7 @@ const SESSION_DAYS = 30;
 export type User = {
   id: string;
   email: string;
+  stripeCustomerId?: string | null;
 };
 
 function normalizeEmail(email: string): string {
@@ -107,7 +108,13 @@ export async function createUserSession(email: string, password: string): Promis
     VALUES (${sessionId}, ${userId}, ${expiresAt.toISOString()})
   `;
 
-  return { user: { id: userId, email: normalized }, sessionId, expiresAt };
+  await sql`
+    INSERT INTO billing_accounts (user_id)
+    VALUES (${userId})
+    ON CONFLICT (user_id) DO NOTHING
+  `;
+
+  return { user: { id: userId, email: normalized, stripeCustomerId: null }, sessionId, expiresAt };
 }
 
 export async function loginUser(email: string, password: string): Promise<{
@@ -118,12 +125,14 @@ export async function loginUser(email: string, password: string): Promise<{
   await ensureSchema();
   const normalized = normalizeEmail(email);
   const rows = await sql`
-    SELECT id, email, password_hash
+    SELECT id, email, password_hash, stripe_customer_id
     FROM users
     WHERE email = ${normalized}
     LIMIT 1
   `;
-  const user = rows[0] as { id: string; email: string; password_hash: string } | undefined;
+  const user = rows[0] as
+    | { id: string; email: string; password_hash: string; stripe_customer_id: string | null }
+    | undefined;
   if (!user || !(await verifyPassword(password, user.password_hash))) {
     throw new Error("Invalid email or password.");
   }
@@ -135,7 +144,11 @@ export async function loginUser(email: string, password: string): Promise<{
     VALUES (${sessionId}, ${user.id}, ${expiresAt.toISOString()})
   `;
 
-  return { user: { id: user.id, email: user.email }, sessionId, expiresAt };
+  return {
+    user: { id: user.id, email: user.email, stripeCustomerId: user.stripe_customer_id },
+    sessionId,
+    expiresAt
+  };
 }
 
 export async function userFromRequest(request: Request): Promise<User | null> {
@@ -144,7 +157,7 @@ export async function userFromRequest(request: Request): Promise<User | null> {
   await ensureSchema();
 
   const rows = await sql`
-    SELECT users.id, users.email
+    SELECT users.id, users.email, users.stripe_customer_id AS "stripeCustomerId"
     FROM sessions
     JOIN users ON users.id = sessions.user_id
     WHERE sessions.id = ${sessionId}

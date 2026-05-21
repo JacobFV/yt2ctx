@@ -21,9 +21,12 @@ export async function ensureSchema(): Promise<void> {
         id UUID PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
+        stripe_customer_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS users_stripe_customer_idx ON users(stripe_customer_id)`;
     await sql`
       CREATE TABLE IF NOT EXISTS sessions (
         id UUID PRIMARY KEY,
@@ -56,6 +59,49 @@ export async function ensureSchema(): Promise<void> {
     await sql`
       CREATE INDEX IF NOT EXISTS videos_user_created_idx ON videos(user_id, created_at DESC)
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS billing_accounts (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        credit_balance_cents INTEGER NOT NULL DEFAULT 0,
+        auto_refill_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        auto_refill_threshold_cents INTEGER NOT NULL DEFAULT 200,
+        auto_refill_amount_cents INTEGER NOT NULL DEFAULT 1000,
+        recurring_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        stripe_subscription_id TEXT,
+        stripe_payment_method_id TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS usage_events (
+        id UUID PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        anonymous_id TEXT,
+        extraction_kind TEXT NOT NULL CHECK (extraction_kind IN ('text', 'full')),
+        free_quota_used BOOLEAN NOT NULL DEFAULT FALSE,
+        credits_spent_cents INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_cents INTEGER NOT NULL DEFAULT 0,
+        source_url TEXT NOT NULL,
+        duration_seconds INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (user_id IS NOT NULL OR anonymous_id IS NOT NULL)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS usage_events_user_idx ON usage_events(user_id, created_at DESC)`;
+    await sql`CREATE INDEX IF NOT EXISTS usage_events_anon_idx ON usage_events(anonymous_id, created_at DESC)`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS billing_ledger (
+        id UUID PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        stripe_event_id TEXT UNIQUE,
+        kind TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL DEFAULT 0,
+        estimated_cost_cents INTEGER NOT NULL DEFAULT 0,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS billing_ledger_user_idx ON billing_ledger(user_id, created_at DESC)`;
   })();
   return schemaReady;
 }

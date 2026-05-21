@@ -135,6 +135,7 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
       id: jobId,
       createdAt: new Date().toISOString(),
       sourceUrl: resolved.url,
+      extractionKind: "full" as const,
       metadata,
       options: {
         topK: resolved.topK,
@@ -151,6 +152,142 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
       transcriptSegments: transcript.segments,
       frames,
       cinematic,
+      artifacts: {
+        outputDir: outputRoot,
+        markdownPath: path.join(outputRoot, "watch.md"),
+        stylePath: path.join(outputRoot, "style-bible.md"),
+        shotSpecsPath: path.join(outputRoot, "shot-specs.json"),
+        shotSpecsMarkdownPath: path.join(outputRoot, "shot-specs.md"),
+        codexPromptPath: path.join(outputRoot, "codex-prompt.md"),
+        metadataPath: path.join(outputRoot, "metadata.json"),
+        zipPath: path.join(outputRoot, "yt2ctx-artifacts.zip"),
+        frameDir
+      }
+    };
+
+    tracker.report("artifacts");
+    const markdown = await persistArtifacts(resultWithoutMarkdown);
+    tracker.report("done");
+    return {
+      ...resultWithoutMarkdown,
+      markdown
+    };
+  } finally {
+    if (!resolved.keepWorkDir) {
+      await rm(workDir, { recursive: true, force: true });
+    }
+  }
+}
+
+export async function analyzeYoutubeTranscript(options: AnalyzeVideoOptions): Promise<VideoAnalysisResult> {
+  const apiKey = getOpenAiKey(options.openAiApiKey);
+  const resolved = {
+    ...DEFAULTS,
+    ...options,
+    outputMode: "watch" as const,
+    transcribeModel: options.transcribeModel ?? DEFAULTS.transcribeModel,
+    visionModel: options.visionModel ?? DEFAULTS.visionModel,
+    embeddingModel: options.embeddingModel ?? DEFAULTS.embeddingModel
+  };
+
+  const tracker = createProgressTracker(options.onProgress);
+  const client = createOpenAiClient(apiKey);
+
+  tracker.report("info");
+  const info = await getVideoInfo(resolved.url);
+  const jobId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto
+    .randomBytes(4)
+    .toString("hex")}-${slugify(info.title || info.id || "video")}`;
+  const outputRoot = path.resolve(resolved.outputDir || defaultOutputDir(), jobId);
+  const workDir = await mkdtemp(path.join(os.tmpdir(), "yt2ctx-"));
+
+  try {
+    const videoPath = path.join(workDir, "video.mp4");
+    const audioPath = path.join(workDir, "audio.mp3");
+    const chunkDir = path.join(workDir, "chunks");
+    const frameDir = path.join(outputRoot, "frames");
+
+    tracker.report("download", { detail: info.title || undefined });
+    await downloadVideo(resolved.url, videoPath);
+    const duration = info.durationSeconds || (await getDurationSeconds(videoPath));
+    const metadata = { ...info, durationSeconds: duration };
+
+    tracker.report("audio");
+    await extractAudio(videoPath, audioPath);
+    const chunkSeconds = 900;
+    const chunks = await splitAudio(audioPath, chunkDir, chunkSeconds);
+
+    tracker.report("transcribe", { current: 0, total: chunks.length });
+    const transcript = await transcribeAudioChunks({
+      client,
+      chunks,
+      chunkSeconds,
+      model: resolved.transcribeModel,
+      onProgress: (current, total) =>
+        tracker.report("transcribe", {
+          current,
+          total,
+          detail: total > 1 ? `Segment ${current} of ${total}` : undefined
+        })
+    });
+
+    const resultWithoutMarkdown = {
+      id: jobId,
+      createdAt: new Date().toISOString(),
+      sourceUrl: resolved.url,
+      extractionKind: "text" as const,
+      metadata,
+      options: {
+        topK: resolved.topK,
+        mode: resolved.mode,
+        outputMode: resolved.outputMode,
+        candidateIntervalSeconds: resolved.candidateIntervalSeconds,
+        maxCandidateFrames: resolved.maxCandidateFrames,
+        frameWidth: resolved.frameWidth,
+        transcribeModel: resolved.transcribeModel,
+        visionModel: resolved.visionModel,
+        embeddingModel: resolved.embeddingModel
+      },
+      transcriptText: transcript.text,
+      transcriptSegments: transcript.segments,
+      frames: [],
+      cinematic: {
+        styleBible: {
+          title: metadata.title || "YouTube video",
+          oneSentenceThesis: "Text-only extraction captured the transcript without visual analysis.",
+          referenceLineage: ["reference video transcript", "text-only context extraction"],
+          productionOntology: "No visual ontology was generated for this text-only extraction.",
+          cinematicPrinciples: [],
+          visualLanguage: {
+            camera: "",
+            lensing: "",
+            lighting: "",
+            composition: "",
+            colorPalette: "",
+            materiality: "",
+            motion: "",
+            editing: "",
+            typography: "",
+            sound: "",
+            performance: ""
+          },
+          narrationLanguage: {
+            register: "",
+            syntaxRules: [],
+            openingPatterns: [],
+            forbiddenPhrases: [],
+            sampleLines: []
+          },
+          shotPatterns: [],
+          transferRules: []
+        },
+        shotSpecs: [],
+        codexPrompt: "",
+        slopWarnings: [],
+        styleMarkdown: "Text-only extraction. Upgrade to a full context extraction for visual grammar.",
+        shotSpecMarkdown: "Text-only extraction. No shot specs were generated.",
+        promptMarkdown: "Text-only extraction. No Codex prompt was generated."
+      },
       artifacts: {
         outputDir: outputRoot,
         markdownPath: path.join(outputRoot, "watch.md"),

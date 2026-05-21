@@ -4,10 +4,21 @@ import { NextResponse } from "next/server";
 import { z } from "zod/v4";
 
 import type { AnalyzeResult } from "../../result-types";
-import { analyzeYoutubeVideo } from "../../../core/analyze";
+import { analyzeYoutubeTranscript, analyzeYoutubeVideo } from "../../../core/analyze";
 import type { ProgressEvent } from "../../../core/types";
-import { requireUser, type User } from "../../../server/auth";
+import { userFromRequest } from "../../../server/auth";
+import { getVideoInfo } from "../../../core/download";
 import { uploadAnalysisArtifacts } from "../../../server/blob-artifacts";
+import {
+  anonymousCookieHeader,
+  anonymousIdFromRequest,
+  authorizeExtraction,
+  createAnonymousId,
+  refundUsageGrant,
+  type UsageGrant
+} from "../../../server/billing";
+import { estimateExtractionCostCents } from "../../../server/pricing";
+import { autoRefillIfNeeded } from "../../../server/stripe";
 import { saveVideo } from "../../../server/videos";
 
 export const runtime = "nodejs";
@@ -29,6 +40,7 @@ const API_INFO = {
       url: "string (required) — youtube.com/watch, youtu.be, or /shorts URL",
       topK: "integer 1–24 (default 8) — number of frames to select",
       mode: "'density' | 'top-k' (default 'density') — frame selection strategy",
+      extractionKind: "'text' | 'full' (default 'full') — text-only transcript or full visual context pack",
       candidateIntervalSeconds: "number 1–120 (default 8) — seconds between sampled frames",
       maxCandidateFrames: "integer 4–80 (default 36) — candidate frames sent to vision",
       frameWidth: "integer 256–1600 (default 768) — extracted frame width in pixels"
@@ -57,7 +69,8 @@ const API_INFO = {
   },
   notes: [
     "Requires OPENAI_API_KEY configured on the server.",
-    "Requires an authenticated web session; completed analyses are saved to the signed-in user's Postgres video library.",
+    "Guest users can run 10 free text-only extractions. Full context extractions require an authenticated web session.",
+    "Completed authenticated analyses are saved to the signed-in user's Postgres video library.",
     "maxDuration is 300s; long videos are better processed via the CLI or MCP server.",
     "Only analyze videos you have the right to download."
   ]
@@ -69,6 +82,7 @@ const requestSchema = z.object({
   mode: z.enum(["top-k", "density"]).default("density"),
   selectionMode: z.enum(["top-k", "density"]).optional(),
   outputMode: z.enum(["watch", "style", "prompt", "shot-specs", "all"]).default("all"),
+  extractionKind: z.enum(["text", "full"]).default("full"),
   candidateIntervalSeconds: z.number().min(1).max(120).default(8),
   maxCandidateFrames: z.number().int().min(4).max(80).default(36),
   frameWidth: z.number().int().min(256).max(1600).default(768)
@@ -129,6 +143,18 @@ async function runAnalysis(
   return uploadAnalysisArtifacts(result);
 }
 
+async function runTextExtraction(
+  body: AnalyzeRequest,
+  onProgress?: (event: ProgressEvent) => void
+): Promise<AnalyzeResult> {
+  const result = await analyzeYoutubeTranscript({
+    ...body,
+    outputDir: path.join(os.tmpdir(), "yt2ctx-web"),
+    onProgress
+  });
+  return uploadAnalysisArtifacts(result);
+}
+
 /** GET /api/analyze — return the endpoint contract so the API is discoverable. */
 export function GET() {
   return NextResponse.json(API_INFO);
@@ -145,12 +171,9 @@ export function GET() {
  *    which is the simplest thing for headless agents to consume.
  */
 export async function POST(request: Request) {
-  let user: User;
-  try {
-    user = await requireUser(request);
-  } catch {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const user = await userFromRequest(request);
+  const existingAnonymousId = anonymousIdFromRequest(request);
+  const anonymousId = existingAnonymousId ?? createAnonymousId();
 
   let body: AnalyzeRequest;
   try {
@@ -159,16 +182,65 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: messageOf(error) }, { status: 400 });
   }
 
+  if (!user && body.extractionKind === "full") {
+    const response = NextResponse.json(
+      { error: "Sign in to run full context extractions." },
+      { status: 401 }
+    );
+    if (!existingAnonymousId) response.headers.append("Set-Cookie", anonymousCookieHeader(anonymousId));
+    return response;
+  }
+
+  let grant: UsageGrant;
+  try {
+    const info = await getVideoInfo(body.url);
+    const durationSeconds = info.durationSeconds || 0;
+    grant = await authorizeExtraction({
+      user,
+      anonymousId,
+      extractionKind: body.extractionKind,
+      sourceUrl: body.url,
+      durationSeconds,
+      estimatedCostCents: estimateExtractionCostCents({
+        extractionKind: body.extractionKind,
+        durationSeconds,
+        maxCandidateFrames: body.maxCandidateFrames,
+        topK: body.topK
+      })
+    });
+  } catch (error) {
+    const response = NextResponse.json({ error: messageOf(error) }, { status: 402 });
+    if (!existingAnonymousId) response.headers.append("Set-Cookie", anonymousCookieHeader(anonymousId));
+    return response;
+  }
+
+  const attachBilling = (result: AnalyzeResult): AnalyzeResult => ({
+    ...result,
+    billing: {
+      freeQuotaUsed: grant.freeQuotaUsed,
+      creditsSpentCents: grant.creditsSpentCents,
+      estimatedCostCents: grant.estimatedCostCents,
+      remainingFree: grant.remainingFree,
+      creditBalanceCents: grant.creditBalanceCents
+    }
+  });
+
   const accept = request.headers.get("accept") || "";
   const wantsStream =
     accept.includes("application/x-ndjson") || accept.includes("text/event-stream");
 
   if (!wantsStream) {
     try {
-      const result = await runAnalysis(body);
-      const video = await saveVideo(user, result, parseYouTubeId(body.url));
-      return NextResponse.json({ ...result, savedVideoId: video.id });
+      const result =
+        body.extractionKind === "text" ? await runTextExtraction(body) : await runAnalysis(body);
+      const withBilling = attachBilling(result);
+      const video = user ? await saveVideo(user, withBilling, parseYouTubeId(body.url)) : null;
+      if (user) await autoRefillIfNeeded(user).catch(() => undefined);
+      const response = NextResponse.json({ ...withBilling, savedVideoId: video?.id });
+      if (!existingAnonymousId) response.headers.append("Set-Cookie", anonymousCookieHeader(anonymousId));
+      return response;
     } catch (error) {
+      await refundUsageGrant(grant);
       return NextResponse.json({ error: messageOf(error) }, { status: 400 });
     }
   }
@@ -187,10 +259,16 @@ export async function POST(request: Request) {
       };
 
       try {
-        const payload = await runAnalysis(body, (event) => send({ type: "progress", ...event }));
-        const video = await saveVideo(user, payload, parseYouTubeId(body.url));
-        send({ type: "result", result: { ...payload, savedVideoId: video.id } });
+        const payload =
+          body.extractionKind === "text"
+            ? await runTextExtraction(body, (event) => send({ type: "progress", ...event }))
+            : await runAnalysis(body, (event) => send({ type: "progress", ...event }));
+        const withBilling = attachBilling(payload);
+        const video = user ? await saveVideo(user, withBilling, parseYouTubeId(body.url)) : null;
+        if (user) await autoRefillIfNeeded(user).catch(() => undefined);
+        send({ type: "result", result: { ...withBilling, savedVideoId: video?.id } });
       } catch (error) {
+        await refundUsageGrant(grant);
         send({ type: "error", message: messageOf(error) });
       } finally {
         closed = true;
@@ -199,11 +277,11 @@ export async function POST(request: Request) {
     }
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store, no-transform",
-      "X-Accel-Buffering": "no"
-    }
+  const headers = new Headers({
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-store, no-transform",
+    "X-Accel-Buffering": "no"
   });
+  if (!existingAnonymousId) headers.append("Set-Cookie", anonymousCookieHeader(anonymousId));
+  return new Response(stream, { headers });
 }
