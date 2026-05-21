@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+title: "Feature: "
+labels: ["enhancement", "needs triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is blocked or awkward today?
+      placeholder: I want to use yt2ctx for ... but currently ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should change?
+      placeholder: Add support for ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface
+      options:
+        - Web app
+        - CLI
+        - MCP server
+        - HTTP API
+        - Core pipeline
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds, prior art, or design constraints worth considering?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, links, sample outputs, or implementation notes.

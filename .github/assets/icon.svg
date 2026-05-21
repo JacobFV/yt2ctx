@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">yt2ctx icon</title>
+  <desc id="desc">A red play aperture surrounded by transcript and frame marks.</desc>
+  <rect width="512" height="512" rx="96" fill="#211c17"/>
+  <path d="M88 152C88 124.386 110.386 102 138 102H374C401.614 102 424 124.386 424 152V360C424 387.614 401.614 410 374 410H138C110.386 410 88 387.614 88 360V152Z" fill="#f7efe2"/>
+  <path d="M180 170L330 256L180 342V170Z" fill="#c5341b"/>
+  <path d="M126 148H386" stroke="#211c17" stroke-width="18" stroke-linecap="round"/>
+  <path d="M126 364H226" stroke="#211c17" stroke-width="18" stroke-linecap="round"/>
+  <path d="M272 364H386" stroke="#211c17" stroke-width="18" stroke-linecap="round"/>
+  <path d="M126 196H154" stroke="#c5341b" stroke-width="18" stroke-linecap="round"/>
+  <path d="M358 196H386" stroke="#c5341b" stroke-width="18" stroke-linecap="round"/>
+</svg>

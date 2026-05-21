@@ -1,0 +1,63 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly.
+title: "Bug: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please include enough detail for someone else to reproduce the issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+      placeholder: Running yt2ctx with ... fails because ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include the command, route, or UI flow that triggered the problem.
+      placeholder: |
+        1. Run `npm run cli -- "..."`
+        2. Set `--selection-mode density`
+        3. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste relevant logs, screenshots, or artifact snippets. Redact API keys and private URLs.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: yt2ctx version or commit
+      placeholder: v1.0.0 or commit SHA
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options:
+        - Web app
+        - CLI
+        - MCP server
+        - HTTP API
+        - Core library
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: node --version
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, package manager, browser, MCP client, deployment target, or anything else relevant.
+      placeholder: macOS 15, npm 10, Claude Desktop, Vercel, etc.

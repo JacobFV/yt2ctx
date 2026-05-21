@@ -1,11 +1,11 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="Youtube to Context — cinematic context compiler" width="860">
+<img src="assets/banner.svg" alt="yt2ctx — cinematic context compiler" width="860">
 
 <br/>
 <br/>
 
-<img src="assets/landing.png" alt="The Youtube to Context web app — &ldquo;The Reference Monograph&rdquo;" width="880">
+<img src="assets/landing.png" alt="The yt2ctx web app — &ldquo;The Reference Monograph&rdquo;" width="880">
 
 <br/>
 <br/>
@@ -20,11 +20,12 @@ into copy-paste artifacts your coding agents can build from.
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2020-211c17?style=flat-square)
 ![Next.js](https://img.shields.io/badge/Next.js-16-211c17?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-211c17?style=flat-square)
+![CI](https://img.shields.io/github/actions/workflow/status/JacobFV/yt2ctx/ci.yml?branch=main&style=flat-square&label=CI)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-c5341b?style=flat-square)
 
 [Overview](#overview) · [Quick start](#quick-start) · [Web app](#web-app) ·
 [CLI](#cli) · [MCP server](#mcp-server) · [HTTP API](#http-api) ·
-[Roadmap](#roadmap)
+[Contributing](#contributing) · [Roadmap](#roadmap)
 
 </div>
 
@@ -32,7 +33,7 @@ into copy-paste artifacts your coding agents can build from.
 
 ## Overview
 
-Youtube to Context (`yt2ctx`) is a pipeline that watches a YouTube video the way a film editor
+`yt2ctx` is a pipeline that watches a YouTube video the way a film editor
 would, then writes down what it learned. It is not just a transcript tool — the
 goal is to turn **reference cinema into executable production grammar** for
 coding agents and downstream generation systems.
@@ -55,6 +56,17 @@ MCP stdio server.
 URL ─▶ download ─▶ audio ─▶ transcribe ─▶ sample frames ─▶ vision + embeddings
     ─▶ score & select ─▶ compile cinematic grammar ─▶ artifacts ( md · json · jpg · zip )
 ```
+
+## Why use it?
+
+- **Agent-ready outputs**: produces Markdown, JSON, selected frames, shot specs,
+  and implementation prompts instead of a transcript alone.
+- **One core pipeline**: the web app, CLI, HTTP API, and MCP server all share the
+  same analysis logic.
+- **Portable artifacts**: every run writes a self-contained job folder and ZIP
+  bundle that can be shared with humans or passed to downstream tools.
+- **OSS-friendly by default**: typed TypeScript, explicit environment config,
+  issue templates, CI, Dependabot, and contribution guidance are included.
 
 ## How it works
 
@@ -96,6 +108,37 @@ Or skip the browser and go straight to the CLI:
 ```bash
 npm run cli -- "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
+
+## Local development
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+Useful checks:
+
+```bash
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The build runs the Next.js app and compiles the CLI/MCP binaries into `dist/`.
+Generated analysis output is written to `.yt2ctx/` by default and should not be
+committed.
+
+## Project layout
+
+| Path | Purpose |
+|------|---------|
+| `src/core/` | Shared download, transcription, frame analysis, scoring, rendering, and packaging logic. |
+| `src/app/` | Next.js web app, docs pages, and HTTP API route. |
+| `src/cli.ts` | Command-line interface over the core pipeline. |
+| `src/mcp.ts` | MCP stdio server exposing `watch_youtube`. |
+| `assets/` | README and product artwork. |
+| `.github/` | Issue forms, PR template, CI, Dependabot, labels, and repo assets. |
 
 ---
 
@@ -161,7 +204,7 @@ JSON, so it stays safe to pipe.
 
 ## MCP server
 
-Youtube to Context exposes the pipeline to MCP clients (Claude Desktop, Claude Code, and
+yt2ctx exposes the pipeline to MCP clients (Claude Desktop, Claude Code, and
 any other agent that speaks MCP) as a single tool: **`watch_youtube`**.
 
 ### 1. Build the server
@@ -378,8 +421,34 @@ billing so it cannot run up unbounded OpenAI spend — is tracked in
 
 ## Contributing
 
-Issues and pull requests are welcome. The codebase is TypeScript throughout;
-`npm run typecheck` and `npm run lint` should pass before opening a PR.
+Issues and pull requests are welcome. Good contributions include bug fixes,
+documentation improvements, sharper prompts/artifact schemas, better frame
+selection heuristics, and MCP/client compatibility work.
+
+Before opening a PR:
+
+1. Search existing issues to avoid duplicate work.
+2. Keep the change focused and include screenshots or sample artifacts for UI
+   and output changes.
+3. Run `npm run typecheck`, `npm run lint`, and, when practical,
+   `npm run build`.
+4. Do not commit `.env`, API keys, private video URLs, or generated `.yt2ctx/`
+   output.
+
+Use the issue templates for bugs and feature requests, and the PR template for
+review context. Security reports should be opened privately through GitHub
+Security Advisories rather than public issues.
+
+## Community health
+
+This repository includes:
+
+- bug and feature request issue forms
+- a pull request template
+- CI for typecheck, lint, and build
+- Dependabot configuration for npm and GitHub Actions
+- a label set for triage
+- a funding placeholder for future sponsorship setup
 
 ## Notes
 
