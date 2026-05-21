@@ -18,6 +18,8 @@ export function renderMarkdown(params: {
   if (params.metadata.uploader) lines.push(`Uploader: ${params.metadata.uploader}`);
   lines.push(`Duration: ${formatTimestamp(params.metadata.durationSeconds)}`);
   lines.push("");
+  lines.push("Generated artifacts: `watch.md`, `style-bible.md`, `shot-specs.md`, `shot-specs.json`, `codex-prompt.md`, selected frame JPGs, and a ZIP bundle.");
+  lines.push("");
   lines.push("## Representative frames");
   lines.push("");
   for (const frame of params.frames) {
@@ -51,6 +53,14 @@ export async function persistArtifacts(result: Omit<VideoAnalysisResult, "markdo
   });
 
   await writeFile(result.artifacts.markdownPath, markdown, "utf8");
+  await writeFile(result.artifacts.stylePath, result.cinematic.styleMarkdown, "utf8");
+  await writeFile(result.artifacts.shotSpecsMarkdownPath, result.cinematic.shotSpecMarkdown, "utf8");
+  await writeFile(
+    result.artifacts.shotSpecsPath,
+    JSON.stringify(result.cinematic.shotSpecs, null, 2),
+    "utf8"
+  );
+  await writeFile(result.artifacts.codexPromptPath, result.cinematic.promptMarkdown, "utf8");
   await writeFile(
     result.artifacts.metadataPath,
     JSON.stringify(
@@ -66,6 +76,10 @@ export async function persistArtifacts(result: Omit<VideoAnalysisResult, "markdo
 
   const zip = new JSZip();
   zip.file("watch.md", markdown);
+  zip.file("style-bible.md", result.cinematic.styleMarkdown);
+  zip.file("shot-specs.md", result.cinematic.shotSpecMarkdown);
+  zip.file("shot-specs.json", JSON.stringify(result.cinematic.shotSpecs, null, 2));
+  zip.file("codex-prompt.md", result.cinematic.promptMarkdown);
   zip.file("metadata.json", JSON.stringify({ ...result, markdown: undefined }, null, 2));
   for (const frame of result.frames) {
     zip.file(`frames/${frame.fileName}`, await readFile(frame.path));

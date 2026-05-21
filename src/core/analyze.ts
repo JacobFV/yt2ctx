@@ -6,7 +6,12 @@ import crypto from "node:crypto";
 import { defaultOutputDir, getOpenAiKey } from "./env";
 import { downloadVideo, getVideoInfo } from "./download";
 import { extractAudio, extractCandidateFrames, getDurationSeconds, splitAudio } from "./media";
-import { analyzeFramesSemantically, createOpenAiClient, transcribeAudioChunks } from "./openai";
+import {
+  analyzeCinematicGrammar,
+  analyzeFramesSemantically,
+  createOpenAiClient,
+  transcribeAudioChunks
+} from "./openai";
 import { persistArtifacts, moveSelectedFrames } from "./render";
 import { selectFrames } from "./select";
 import { slugify } from "./time";
@@ -15,6 +20,7 @@ import type { AnalyzeVideoOptions, VideoAnalysisResult } from "./types";
 const DEFAULTS = {
   topK: 8,
   mode: "density" as const,
+  outputMode: "all" as const,
   candidateIntervalSeconds: 8,
   maxCandidateFrames: 36,
   frameWidth: 768,
@@ -29,7 +35,8 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
     ...DEFAULTS,
     ...options,
     topK: options.topK ?? DEFAULTS.topK,
-    mode: options.mode ?? DEFAULTS.mode,
+    mode: options.selectionMode ?? options.mode ?? DEFAULTS.mode,
+    outputMode: options.outputMode ?? DEFAULTS.outputMode,
     candidateIntervalSeconds:
       options.candidateIntervalSeconds ?? DEFAULTS.candidateIntervalSeconds,
     maxCandidateFrames: options.maxCandidateFrames ?? DEFAULTS.maxCandidateFrames,
@@ -86,6 +93,14 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
     });
     const selected = selectFrames(analyzedFrames, resolved.topK, resolved.mode);
     const frames = await moveSelectedFrames({ selectedFrames: selected, frameDir });
+    const cinematic = await analyzeCinematicGrammar({
+      client,
+      model: resolved.visionModel,
+      metadataTitle: metadata.title || "YouTube video",
+      sourceUrl: resolved.url,
+      transcriptText: transcript.text,
+      frames
+    });
 
     const resultWithoutMarkdown = {
       id: jobId,
@@ -95,6 +110,7 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
       options: {
         topK: resolved.topK,
         mode: resolved.mode,
+        outputMode: resolved.outputMode,
         candidateIntervalSeconds: resolved.candidateIntervalSeconds,
         maxCandidateFrames: resolved.maxCandidateFrames,
         frameWidth: resolved.frameWidth,
@@ -105,9 +121,14 @@ export async function analyzeYoutubeVideo(options: AnalyzeVideoOptions): Promise
       transcriptText: transcript.text,
       transcriptSegments: transcript.segments,
       frames,
+      cinematic,
       artifacts: {
         outputDir: outputRoot,
         markdownPath: path.join(outputRoot, "watch.md"),
+        stylePath: path.join(outputRoot, "style-bible.md"),
+        shotSpecsPath: path.join(outputRoot, "shot-specs.json"),
+        shotSpecsMarkdownPath: path.join(outputRoot, "shot-specs.md"),
+        codexPromptPath: path.join(outputRoot, "codex-prompt.md"),
         metadataPath: path.join(outputRoot, "metadata.json"),
         zipPath: path.join(outputRoot, "yt-view-artifacts.zip"),
         frameDir
